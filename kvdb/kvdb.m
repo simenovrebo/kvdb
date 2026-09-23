@@ -430,24 +430,10 @@ int kvdbQueryCallback(void *resultBlock, int argc, char **argv, char **column) {
     for (int i=0; i< argc; i++) {
         NSString *columnName = [NSString stringWithCString:column[i] encoding:NSUTF8StringEncoding];
 
-        id value = nil;
+        // sqlite3_exec() gives the text of each column, so this callback cannot return archived values (blobs).
+        // It is only used for queries without them (e.g. the table schema); values are read with prepared statements.
+        id value = argv[i] ? [NSString stringWithCString:argv[i] encoding:NSUTF8StringEncoding] : nil;
 
-        if ([columnName isEqualToString:@"value"] == NO) {
-            value = [NSString stringWithCString:argv[i] encoding:NSUTF8StringEncoding];
-        } else {
-            sqlite3_int64 rowID = 0;
-            sqlite3_blob *blob = NULL;
-
-            NSData *data = [[KVDB sharedDB] _readBlobFromDatabaseNamed:@"main"
-                                                             tableName:kKVDBTableName
-                                                            columnName:@"value"
-                                                                 rowID:rowID
-                                                                  blob:&blob];
-
-            // Revive object from NSKeyedArchiver
-            value = [[KVDB sharedDB] unarchiveData:data];
-        }
-        
         if (value != nil) [row setObject:value forKey:columnName];
     }
     
