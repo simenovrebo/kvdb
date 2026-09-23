@@ -249,7 +249,8 @@ static KVDB *kvdbInstance = nil;
 
         if ([blob length]) {
             id value = [self unarchiveData:blob];
-            [rowDict setObject:value forKey:@"value"];
+            if (value != nil) // nil if it cannot be decoded
+                [rowDict setObject:value forKey:@"value"];
         }
 
         [array addObject:rowDict];
@@ -382,19 +383,40 @@ static KVDB *kvdbInstance = nil;
     }
 
     int byteCt = sqlite3_blob_bytes(*blob);
-    Byte byteBuff[byteCt];
+    NSMutableData *data = [NSMutableData dataWithLength:byteCt];
+    status = sqlite3_blob_read(*blob, data.mutableBytes, byteCt, 0);
+    sqlite3_blob_close(*blob);
+    *blob = NULL;
 
-    return [NSData dataWithBytes:byteBuff length:byteCt];
+    if (status != SQLITE_OK) {
+        @throw KVDBExceptionDBRead();
+    }
+
+    return data;
 }
 
 - (NSData *)archiveObject:(id)object {
-    return [NSKeyedArchiver archivedDataWithRootObject:object];
+    NSError *error;
+    NSData *data = [NSKeyedArchiver archivedDataWithRootObject:object requiringSecureCoding:NO error:&error];
+    if (data == nil) NSLog(@"KVDB: unable to archive %@: %@", object, error);
+    return data;
 }
 
+// Values are decoded securely, i.e. only property list types (and URLs, sets, NSNull) are allowed, so that a
+// database changed by someone else cannot create arbitrary objects.
 - (id)unarchiveData:(NSData *)data {
     if (data == nil) return nil;
 
-    return [NSKeyedUnarchiver unarchiveObjectWithData:data];
+    static NSSet *allowedClasses;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        allowedClasses = [NSSet setWithObjects:[NSDictionary class], [NSArray class], [NSString class], [NSNumber class], [NSDate class], [NSData class], [NSNull class], [NSURL class], [NSSet class], nil];
+    });
+
+    NSError *error;
+    id value = [NSKeyedUnarchiver unarchivedObjectOfClasses:allowedClasses fromData:data error:&error];
+    if (value == nil) NSLog(@"KVDB: unable to unarchive value: %@", error);
+    return value;
 }
 
 @end
@@ -423,8 +445,7 @@ int kvdbQueryCallback(void *resultBlock, int argc, char **argv, char **column) {
                                                                   blob:&blob];
 
             // Revive object from NSKeyedArchiver
-            if (data != nil)
-                value = [NSKeyedUnarchiver unarchiveObjectWithData:data];
+            value = [[KVDB sharedDB] unarchiveData:data];
         }
         
         if (value != nil) [row setObject:value forKey:columnName];
